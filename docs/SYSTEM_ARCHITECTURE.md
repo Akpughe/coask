@@ -134,9 +134,9 @@ Each agent is a specialized AI module with:
 - Answers factual questions
 
 **Tools**:
-- RAG system (LlamaIndex)
-- Vector database queries
-- Document parsing
+- Custom RAG Pipeline (Mistral OCR + ChonkieJS + OpenAI Embeddings + Pinecone)
+- Hybrid search (vector + keyword)
+- Document extraction and chunking
 
 #### 📧 Email Agent
 **Role**: Email composition and sending
@@ -231,7 +231,11 @@ Each agent is a specialized AI module with:
 - Company policies and procedures
 - FAQs and common responses
 - **Storage**: Vector database + structured documents
-- **Technology**: LlamaIndex for indexing, Pinecone/Weaviate for storage
+- **Technology**: Custom RAG Pipeline
+  - Mistral OCR for document extraction
+  - ChonkieJS for text chunking
+  - OpenAI text-embedding-ada-002 for embeddings
+  - Pinecone for vector storage with hybrid search
 
 **Working Memory** (Current Context)
 - Active conversation state

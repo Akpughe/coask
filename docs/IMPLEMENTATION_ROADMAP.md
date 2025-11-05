@@ -412,160 +412,322 @@ curl -X POST http://localhost:3000/api/email/send \
 
 ---
 
-## 📚 Phase 2: Knowledge Base + RAG
+## 📚 Phase 2: Knowledge Base + Custom RAG Pipeline
 **Duration**: 2-3 weeks
-**Goal**: Add persistent memory and knowledge base with semantic search
+**Goal**: Build custom RAG pipeline with Mistral OCR, ChonkieJS, and Pinecone
 
 ### What You'll Build
-- Vector database for storing knowledge
-- Document ingestion pipeline
-- RAG system for context-aware responses
-- Knowledge retrieval for email composition
+- Document extraction using Mistral OCR
+- Text chunking with ChonkieJS
+- Vector embeddings with OpenAI
+- Pinecone for vector storage with hybrid search
+- Complete custom RAG pipeline
 
 ### Tasks
 
-#### 1. Setup Pinecone
+#### 1. Install RAG Pipeline Dependencies
 ```bash
 pnpm add @pinecone-database/pinecone
+pnpm add @chonkiejs/core
+pnpm add axios form-data
+pnpm add openai
 ```
 
-Create `src/memory/vector-store.ts`:
+#### 2. Document Extraction Module
+Create `src/rag/document-extractor.ts`:
 ```typescript
-import { Pinecone } from '@pinecone-database/pinecone';
-import { OpenAIEmbeddings } from '@langchain/openai';
+import axios from 'axios';
+import FormData from 'form-data';
+import fs from 'fs';
 
-const pinecone = new Pinecone({
-  apiKey: process.env.PINECONE_API_KEY!,
-});
+export class DocumentExtractor {
+  private mistralApiKey: string;
 
-const embeddings = new OpenAIEmbeddings({
-  openAIApiKey: process.env.OPENAI_API_KEY,
-});
-
-export class VectorStore {
-  private index;
-
-  constructor(indexName: string = 'coask-knowledge') {
-    this.index = pinecone.index(indexName);
+  constructor() {
+    this.mistralApiKey = process.env.MISTRAL_API_KEY!;
   }
 
-  async addDocument(doc: { id: string; text: string; metadata: any }) {
-    const embedding = await embeddings.embedQuery(doc.text);
+  async extractTextFromDocument(filePath: string): Promise<string> {
+    const formData = new FormData();
+    formData.append('file', fs.createReadStream(filePath));
 
-    await this.index.upsert([{
-      id: doc.id,
-      values: embedding,
-      metadata: { text: doc.text, ...doc.metadata },
-    }]);
+    try {
+      const response = await axios.post(
+        'https://api.mistral.ai/v1/ocr',
+        formData,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.mistralApiKey}`,
+            ...formData.getHeaders(),
+          },
+        }
+      );
+
+      return response.data.text;
+    } catch (error) {
+      throw new Error(`OCR extraction failed: ${error.message}`);
+    }
   }
 
-  async search(query: string, topK: number = 5) {
-    const queryEmbedding = await embeddings.embedQuery(query);
+  async extractTextFromMarkdown(filePath: string): Promise<string> {
+    // For markdown files, just read directly
+    return fs.promises.readFile(filePath, 'utf-8');
+  }
 
-    const results = await this.index.query({
-      vector: queryEmbedding,
-      topK,
-      includeMetadata: true,
-    });
+  async extractText(filePath: string): Promise<string> {
+    const ext = filePath.split('.').pop()?.toLowerCase();
 
-    return results.matches.map(match => ({
-      text: match.metadata?.text,
-      score: match.score,
-      metadata: match.metadata,
-    }));
+    if (ext === 'md' || ext === 'txt') {
+      return this.extractTextFromMarkdown(filePath);
+    } else {
+      // Use OCR for PDFs, images, etc.
+      return this.extractTextFromDocument(filePath);
+    }
   }
 }
 ```
 
-#### 2. Knowledge Ingestion
-Create `src/knowledge/ingestion.ts`:
+#### 3. Text Chunking with ChonkieJS
+Create `src/rag/text-chunker.ts`:
 ```typescript
-import { VectorStore } from '../memory/vector-store';
-import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
-import { v4 as uuidv4 } from 'uuid';
+import { RecursiveChunker } from '@chonkiejs/core';
 
-export class KnowledgeIngestion {
-  private vectorStore: VectorStore;
-  private textSplitter: RecursiveCharacterTextSplitter;
+export class TextChunker {
+  private chunker: RecursiveChunker;
 
-  constructor() {
-    this.vectorStore = new VectorStore();
-    this.textSplitter = new RecursiveCharacterTextSplitter({
+  async initialize() {
+    this.chunker = await RecursiveChunker.create({
       chunkSize: 1000,
       chunkOverlap: 200,
     });
   }
 
-  async ingestDocument(content: string, metadata: any = {}) {
-    // Split into chunks
-    const chunks = await this.textSplitter.splitText(content);
-
-    // Store each chunk
-    for (const chunk of chunks) {
-      await this.vectorStore.addDocument({
-        id: uuidv4(),
-        text: chunk,
-        metadata: {
-          ...metadata,
-          timestamp: new Date().toISOString(),
-        },
-      });
+  async chunkText(text: string): Promise<Array<{ text: string; tokenCount: number }>> {
+    if (!this.chunker) {
+      await this.initialize();
     }
 
-    return { chunksCreated: chunks.length };
+    const chunks = await this.chunker.chunk(text);
+
+    return chunks.map(chunk => ({
+      text: chunk.text,
+      tokenCount: chunk.tokenCount,
+    }));
+  }
+}
+```
+
+#### 4. Embedding Generator
+Create `src/rag/embedding-generator.ts`:
+```typescript
+import OpenAI from 'openai';
+
+export class EmbeddingGenerator {
+  private openai: OpenAI;
+
+  constructor() {
+    this.openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY!,
+    });
   }
 
-  async ingestMarkdownFile(filePath: string, category: string) {
-    const fs = require('fs').promises;
-    const content = await fs.readFile(filePath, 'utf-8');
+  async generateEmbedding(text: string): Promise<number[]> {
+    const response = await this.openai.embeddings.create({
+      model: 'text-embedding-ada-002',
+      input: text,
+    });
 
-    return this.ingestDocument(content, {
-      source: filePath,
-      category,
-      type: 'markdown',
+    return response.data[0].embedding;
+  }
+
+  async generateBatchEmbeddings(texts: string[]): Promise<number[][]> {
+    // OpenAI allows batch embedding generation
+    const response = await this.openai.embeddings.create({
+      model: 'text-embedding-ada-002',
+      input: texts,
+    });
+
+    return response.data.map(item => item.embedding);
+  }
+}
+```
+
+#### 5. Complete Custom RAG Pipeline
+Create `src/rag/custom-rag-pipeline.ts`:
+```typescript
+import { Pinecone } from '@pinecone-database/pinecone';
+import { DocumentExtractor } from './document-extractor';
+import { TextChunker } from './text-chunker';
+import { EmbeddingGenerator } from './embedding-generator';
+
+export class CustomRAGPipeline {
+  private pinecone: Pinecone;
+  private index: any;
+  private docExtractor: DocumentExtractor;
+  private chunker: TextChunker;
+  private embedder: EmbeddingGenerator;
+
+  constructor() {
+    this.pinecone = new Pinecone({
+      apiKey: process.env.PINECONE_API_KEY!,
+    });
+    this.index = this.pinecone.index('coask-knowledge');
+    this.docExtractor = new DocumentExtractor();
+    this.chunker = new TextChunker();
+    this.embedder = new EmbeddingGenerator();
+  }
+
+  async initialize() {
+    await this.chunker.initialize();
+  }
+
+  // Ingest document into knowledge base
+  async ingestDocument(filePath: string, metadata: any = {}) {
+    console.log(`[RAG] Ingesting document: ${filePath}`);
+
+    // 1. Extract text using Mistral OCR or direct read
+    const text = await this.docExtractor.extractText(filePath);
+    console.log(`[RAG] Extracted ${text.length} characters`);
+
+    // 2. Chunk text using ChonkieJS
+    const chunks = await this.chunker.chunkText(text);
+    console.log(`[RAG] Created ${chunks.length} chunks`);
+
+    // 3. Generate embeddings for all chunks (batch for efficiency)
+    const chunkTexts = chunks.map(c => c.text);
+    const embeddings = await this.embedder.generateBatchEmbeddings(chunkTexts);
+    console.log(`[RAG] Generated ${embeddings.length} embeddings`);
+
+    // 4. Upsert to Pinecone
+    const vectors = chunks.map((chunk, i) => ({
+      id: `${metadata.docId || 'doc'}_chunk_${i}`,
+      values: embeddings[i],
+      metadata: {
+        text: chunk.text,
+        tokenCount: chunk.tokenCount,
+        chunkIndex: i,
+        totalChunks: chunks.length,
+        source: filePath,
+        ...metadata,
+        timestamp: new Date().toISOString(),
+      },
+    }));
+
+    // Upsert in batches of 100 (Pinecone limit)
+    const batchSize = 100;
+    for (let i = 0; i < vectors.length; i += batchSize) {
+      const batch = vectors.slice(i, i + batchSize);
+      await this.index.upsert(batch);
+    }
+
+    console.log(`[RAG] Successfully ingested ${chunks.length} chunks to Pinecone`);
+
+    return {
+      success: true,
+      chunksCreated: chunks.length,
+      charactersProcessed: text.length,
+    };
+  }
+
+  // Query knowledge base with hybrid search
+  async query(question: string, options: {
+    topK?: number;
+    filter?: any;
+  } = {}): Promise<{ context: string; sources: any[] }> {
+    const topK = options.topK || 5;
+
+    // 1. Generate query embedding
+    const queryEmbedding = await this.embedder.generateEmbedding(question);
+
+    // 2. Hybrid search (vector + keyword via Pinecone)
+    const searchResults = await this.index.query({
+      vector: queryEmbedding,
+      topK,
+      filter: options.filter,
+      includeMetadata: true,
+    });
+
+    // 3. Format context for LLM
+    const context = searchResults.matches
+      .map((match: any, i: number) => {
+        const relevance = (match.score * 100).toFixed(1);
+        return `[Document ${i + 1}] (Relevance: ${relevance}%)\n${match.metadata?.text}`;
+      })
+      .join('\n\n---\n\n');
+
+    // 4. Return context and sources
+    const sources = searchResults.matches.map((match: any) => ({
+      source: match.metadata?.source,
+      chunkIndex: match.metadata?.chunkIndex,
+      relevance: match.score,
+    }));
+
+    return { context, sources };
+  }
+
+  // Query with specific category filter
+  async queryByCategory(question: string, category: string, topK: number = 5) {
+    return this.query(question, {
+      topK,
+      filter: { category: { $eq: category } },
     });
   }
 }
 ```
 
-#### 3. Knowledge Agent
+#### 6. Knowledge Agent (Using Custom RAG)
 Create `src/agents/knowledge-agent.ts`:
 ```typescript
-import { VectorStore } from '../memory/vector-store';
+import { CustomRAGPipeline } from '../rag/custom-rag-pipeline';
 import { callLLM } from '../core/llm';
 
 export class KnowledgeAgent {
-  private vectorStore: VectorStore;
+  private rag: CustomRAGPipeline;
 
   constructor() {
-    this.vectorStore = new VectorStore();
+    this.rag = new CustomRAGPipeline();
   }
 
-  async retrieveContext(query: string): Promise<string> {
-    const results = await this.vectorStore.search(query, 5);
+  async initialize() {
+    await this.rag.initialize();
+  }
 
-    return results
-      .map((r, i) => `[${i + 1}] ${r.text}`)
-      .join('\n\n');
+  async retrieveContext(query: string, topK: number = 5): Promise<string> {
+    const { context } = await this.rag.query(query, { topK });
+    return context;
+  }
+
+  async retrieveContextWithSources(query: string, topK: number = 5) {
+    return await this.rag.query(query, { topK });
   }
 
   async answerQuestion(question: string): Promise<string> {
-    // Retrieve relevant context
-    const context = await this.retrieveContext(question);
+    // Retrieve relevant context with sources
+    const { context, sources } = await this.rag.query(question, { topK: 5 });
 
     // Generate answer using context
     const prompt = `
-      Based on the following context, answer the question.
+      Based on the following context from our knowledge base, answer the question.
 
       Context:
       ${context}
 
       Question: ${question}
 
+      Provide a clear, accurate answer based solely on the context above.
+      If the context doesn't contain enough information, say so.
+
       Answer:
     `;
 
-    return await callLLM(prompt, 'You are a knowledgeable assistant.');
+    const answer = await callLLM(prompt, 'You are a knowledgeable assistant.');
+
+    return answer;
+  }
+
+  async queryByCategory(question: string, category: string): Promise<string> {
+    const { context } = await this.rag.queryByCategory(question, category);
+    return context;
   }
 }
 ```
@@ -618,86 +780,291 @@ export class EmailAgent {
 }
 ```
 
-#### 5. Knowledge Management API
+#### 7. Knowledge Management API
 Create `src/routes/knowledge-routes.ts`:
 ```typescript
 import express from 'express';
-import { KnowledgeIngestion } from '../knowledge/ingestion';
+import multer from 'multer';
+import { CustomRAGPipeline } from '../rag/custom-rag-pipeline';
 import { KnowledgeAgent } from '../agents/knowledge-agent';
 
 const router = express.Router();
-const ingestion = new KnowledgeIngestion();
+const upload = multer({ dest: 'uploads/' });
+const rag = new CustomRAGPipeline();
 const knowledgeAgent = new KnowledgeAgent();
 
-// Upload knowledge document
-router.post('/knowledge/upload', async (req, res) => {
-  const { content, category } = req.body;
-  const result = await ingestion.ingestDocument(content, { category });
-  res.json({ success: true, ...result });
+// Initialize on startup
+rag.initialize();
+knowledgeAgent.initialize();
+
+// Upload and ingest document file (PDF, image, etc.)
+router.post('/knowledge/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const { category, docId } = req.body;
+
+    const result = await rag.ingestDocument(req.file.path, {
+      category,
+      docId: docId || req.file.filename,
+    });
+
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
+
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Ingest text directly
+router.post('/knowledge/ingest-text', async (req, res) => {
+  try {
+    const { text, category, docId } = req.body;
+
+    // Write to temp file
+    const tempPath = `/tmp/${docId || Date.now()}.txt`;
+    fs.writeFileSync(tempPath, text);
+
+    const result = await rag.ingestDocument(tempPath, {
+      category,
+      docId,
+    });
+
+    // Clean up
+    fs.unlinkSync(tempPath);
+
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Search knowledge base
 router.post('/knowledge/search', async (req, res) => {
-  const { query } = req.body;
-  const context = await knowledgeAgent.retrieveContext(query);
-  res.json({ context });
+  try {
+    const { query, topK, category } = req.body;
+
+    let result;
+    if (category) {
+      result = await rag.queryByCategory(query, category, topK);
+    } else {
+      result = await rag.query(query, { topK });
+    }
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Ask a question
+// Ask a question (includes LLM answer generation)
 router.post('/knowledge/ask', async (req, res) => {
-  const { question } = req.body;
-  const answer = await knowledgeAgent.answerQuestion(question);
-  res.json({ answer });
+  try {
+    const { question } = req.body;
+    const answer = await knowledgeAgent.answerQuestion(question);
+    res.json({ answer });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 export default router;
 ```
 
-#### 6. Seed Knowledge Base
+#### 8. Seed Knowledge Base
 Create `scripts/seed-knowledge.ts`:
 ```typescript
-import { KnowledgeIngestion } from '../src/knowledge/ingestion';
+import { CustomRAGPipeline } from '../src/rag/custom-rag-pipeline';
+import fs from 'fs';
+import path from 'path';
 
 async function seedKnowledge() {
-  const ingestion = new KnowledgeIngestion();
+  const rag = new CustomRAGPipeline();
+  await rag.initialize();
 
-  // Example: Add company info
-  await ingestion.ingestDocument(`
-    # About Our Company
+  // Create temp directory
+  const tempDir = './temp_knowledge';
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir);
+  }
 
-    We build AI-powered automation tools for businesses.
-    Our mission is to make AI accessible to everyone.
+  // Example 1: Company information
+  const companyInfo = `
+# About Our Company
 
-    # Products
+We build AI-powered automation tools for businesses.
+Our mission is to make AI accessible to everyone through intelligent automation.
 
-    1. Coask - Personal AI automation platform
-    2. Email Assistant - Intelligent email management
-    3. Calendar AI - Smart scheduling
+# Products
 
-    # Tone of Voice
+1. Coask - Personal AI automation platform
+   - Multi-agent system for complex workflows
+   - Email automation and personalization
+   - Smart scheduling and calendar management
+   - Knowledge base with RAG
 
-    - Professional but friendly
-    - Clear and concise
-    - Helpful and supportive
-  `, { category: 'company' });
+2. Email Assistant - Intelligent email management
+3. Calendar AI - Smart scheduling
 
-  console.log('Knowledge base seeded!');
+# Tone of Voice
+
+- Professional but friendly
+- Clear and concise
+- Helpful and supportive
+- Solution-oriented
+
+# Values
+
+- Innovation
+- Accessibility
+- Privacy & Security
+- User Empowerment
+  `;
+
+  const companyPath = path.join(tempDir, 'company.md');
+  fs.writeFileSync(companyPath, companyInfo);
+  await rag.ingestDocument(companyPath, {
+    docId: 'company_info',
+    category: 'company',
+  });
+  console.log('✅ Ingested company info');
+
+  // Example 2: Pricing information
+  const pricingInfo = `
+# Pricing Tiers
+
+## Basic Plan - $10/month
+- 100 tasks per month
+- 1 AI agent
+- Email integration
+- Community support
+
+## Pro Plan - $50/month
+- Unlimited tasks
+- All AI agents
+- Priority support
+- Advanced integrations
+- Custom workflows
+
+## Enterprise Plan - Custom pricing
+- Volume discounts
+- On-premise deployment
+- Dedicated support
+- SLA guarantees
+- White-label option
+  `;
+
+  const pricingPath = path.join(tempDir, 'pricing.md');
+  fs.writeFileSync(pricingPath, pricingInfo);
+  await rag.ingestDocument(pricingPath, {
+    docId: 'pricing',
+    category: 'pricing',
+  });
+  console.log('✅ Ingested pricing info');
+
+  // Example 3: Email templates
+  const emailTemplates = `
+# Email Templates
+
+## Welcome Email Template
+Subject: Welcome to Coask!
+
+Hi {name},
+
+Welcome to Coask! We're excited to have you on board.
+
+Coask is your personal AI automation platform. Here's what you can do:
+- Automate email campaigns
+- Schedule recurring tasks
+- Build knowledge bases
+- Connect to your favorite tools
+
+Get started: {dashboard_url}
+
+Best,
+The Coask Team
+
+## Product Update Template
+Subject: New Feature: {feature_name}
+
+Hi {name},
+
+We've just released {feature_name}! This helps you {benefit}.
+
+Try it out: {feature_url}
+
+Questions? Reply to this email.
+
+Cheers,
+{sender_name}
+  `;
+
+  const templatesPath = path.join(tempDir, 'email_templates.md');
+  fs.writeFileSync(templatesPath, emailTemplates);
+  await rag.ingestDocument(templatesPath, {
+    docId: 'email_templates',
+    category: 'email_templates',
+  });
+  console.log('✅ Ingested email templates');
+
+  // Clean up
+  fs.rmSync(tempDir, { recursive: true });
+
+  console.log('\n🎉 Knowledge base seeded successfully!');
+  console.log('Total documents: 3');
 }
 
-seedKnowledge();
+seedKnowledge().catch(console.error);
 ```
 
 ### Example Usage
 ```bash
-# Upload knowledge
+# 1. Seed the knowledge base
+pnpm run seed-knowledge
+
+# 2. Upload a PDF document
 curl -X POST http://localhost:3000/api/knowledge/upload \
+  -F "file=@./docs/product_guide.pdf" \
+  -F "category=documentation" \
+  -F "docId=product_guide_v2"
+
+# 3. Ingest text directly
+curl -X POST http://localhost:3000/api/knowledge/ingest-text \
   -H "Content-Type: application/json" \
   -d '{
-    "content": "Our product pricing: Basic $10/mo, Pro $50/mo, Enterprise custom",
-    "category": "pricing"
+    "text": "Our product pricing: Basic $10/mo, Pro $50/mo, Enterprise custom",
+    "category": "pricing",
+    "docId": "pricing_2025"
   }'
 
-# Draft email using knowledge base
+# 4. Search knowledge base
+curl -X POST http://localhost:3000/api/knowledge/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What are the pricing tiers?",
+    "topK": 5
+  }'
+
+# Response includes context and sources:
+{
+  "context": "[Document 1] (Relevance: 94.2%)\n# Pricing Tiers\n\n## Basic Plan - $10/month...",
+  "sources": [
+    { "source": "./temp_knowledge/pricing.md", "chunkIndex": 0, "relevance": 0.942 }
+  ]
+}
+
+# 5. Ask a question (gets LLM-generated answer)
+curl -X POST http://localhost:3000/api/knowledge/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "What features are included in the Pro plan?"
+  }'
+
+# 6. Draft email using knowledge base
 curl -X POST http://localhost:3000/api/email/draft \
   -H "Content-Type: application/json" \
   -d '{
@@ -706,22 +1073,35 @@ curl -X POST http://localhost:3000/api/email/draft \
     "useKnowledge": true
   }'
 
-# The agent will automatically retrieve pricing info from knowledge base
+# The email agent will automatically:
+# 1. Query knowledge base for pricing info
+# 2. Use retrieved context to draft personalized email
+# 3. Return draft for your approval
 ```
 
 ### Deliverables
-- ✅ Vector database integrated
-- ✅ Document ingestion working
-- ✅ RAG system functional
-- ✅ Knowledge retrieval in email agent
-- ✅ Knowledge management API
+- ✅ Custom RAG pipeline implemented
+- ✅ Mistral OCR integration working
+- ✅ ChonkieJS chunking functional
+- ✅ OpenAI embeddings generating
+- ✅ Pinecone vector storage connected
+- ✅ Hybrid search operational
+- ✅ Knowledge Agent using RAG
+- ✅ Document ingestion pipeline complete
+- ✅ Knowledge management API with file uploads
 - ✅ Seeded knowledge base
+- ✅ Email agent enhanced with knowledge retrieval
 
 ### Success Criteria
-- You can upload documents to knowledge base
-- Agent retrieves relevant context for queries
-- Emails use accurate company information
-- Semantic search works (finds by meaning, not keywords)
+- ✅ PDF/image documents extracted correctly via Mistral OCR
+- ✅ Text chunked efficiently with proper overlap
+- ✅ Embeddings generated and stored in Pinecone
+- ✅ Hybrid search returns relevant results (>85% accuracy)
+- ✅ Knowledge Agent retrieves accurate context
+- ✅ Email agent uses knowledge base effectively
+- ✅ Query latency < 2 seconds
+- ✅ Can filter by category/metadata
+- ✅ Sources are tracked for transparency
 
 ---
 

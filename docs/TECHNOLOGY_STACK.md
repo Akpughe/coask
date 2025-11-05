@@ -39,7 +39,7 @@ For each technology choice, we prioritized:
                       ↕
 ┌─────────────────────────────────────────────────┐
 │              MEMORY SYSTEM                       │
-│  Mem0 • LlamaIndex • Pinecone • Redis            │
+│  Mem0 • Custom RAG • Pinecone • Redis           │
 └─────────────────────────────────────────────────┘
                       ↕
 ┌─────────────────────────────────────────────────┐
@@ -316,25 +316,304 @@ npm install @pinecone-database/pinecone
 
 ---
 
-#### **RAG Framework: LlamaIndex**
-**Why**:
-- **Best for documents**: 35% better retrieval accuracy (2025 benchmarks)
-- **Easy indexing**: Simple API for ingesting documents
-- **Flexible**: Multiple indexing strategies (vector, tree, keyword)
-- **TypeScript support**: First-class TS SDK
+#### **RAG System: Custom Pipeline** ⭐ RECOMMENDED
+**Why Custom Over LlamaIndex**:
+- **Full control**: Fine-tune every step of the pipeline
+- **Optimized for use case**: Tailored to document types and query patterns
+- **Less abstraction**: Direct API calls, easier to debug
+- **Better OCR**: Mistral OCR for superior document extraction
+- **Hybrid search**: Native Pinecone hybrid search (vector + BM25 keyword)
+- **Performance**: No framework overhead
+- **Cost efficient**: Embeddings at $0.0001/1K tokens
 
-**Use Cases**:
-- Building knowledge base from documents
-- Querying company info
-- Template retrieval
+**Components**:
+
+**1. Document Extraction: Mistral OCR API**
+- High-quality text extraction from PDFs, images, documents
+- Handles complex layouts and multi-column text
+- Supports multiple languages
 
 **Installation**:
 ```bash
-npm install llamaindex
+npm install axios form-data
 ```
 
-**Integration with LangChain**:
-Can use LlamaIndex for indexing and LangChain for orchestration (best of both worlds).
+**Usage**:
+```typescript
+import axios from 'axios';
+import FormData from 'form-data';
+import fs from 'fs';
+
+async function extractTextFromDocument(filePath: string): Promise<string> {
+  const formData = new FormData();
+  formData.append('file', fs.createReadStream(filePath));
+
+  const response = await axios.post('https://api.mistral.ai/v1/ocr', formData, {
+    headers: {
+      'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`,
+      ...formData.getHeaders(),
+    },
+  });
+
+  return response.data.text;
+}
+```
+
+**2. Text Chunking: ChonkieJS**
+- Fast, lightweight, and efficient chunking
+- Multiple chunking strategies (Token, Semantic, Recursive, Sentence)
+- TypeScript-native with full type safety
+- Multilingual support (56 languages)
+
+**Installation**:
+```bash
+npm install @chonkiejs/core
+```
+
+**Usage**:
+```typescript
+import { RecursiveChunker } from '@chonkiejs/core';
+
+// Create chunker with overlap for context
+const chunker = await RecursiveChunker.create({
+  chunkSize: 1000,
+  chunkOverlap: 200,
+});
+
+// Chunk text
+const chunks = await chunker.chunk(text);
+
+for (const chunk of chunks) {
+  console.log(`Text: ${chunk.text}`);
+  console.log(`Tokens: ${chunk.tokenCount}`);
+}
+```
+
+**Chunking Strategies Available**:
+- **TokenChunker**: Fixed-size token chunks
+- **RecursiveChunker**: Hierarchical splitting (recommended)
+- **SemanticChunker**: Semantic similarity-based
+- **SentenceChunker**: Sentence boundary-based
+- **WordChunker**: Word count-based
+
+**3. Embeddings: OpenAI text-embedding-ada-002**
+- High quality embeddings (1536 dimensions)
+- Very affordable ($0.0001 / 1K tokens)
+- Proven performance for semantic search
+
+**Installation**:
+```bash
+npm install openai
+```
+
+**Usage**:
+```typescript
+import OpenAI from 'openai';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function generateEmbedding(text: string): Promise<number[]> {
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-ada-002',
+    input: text,
+  });
+
+  return response.data[0].embedding;
+}
+```
+
+**4. Complete Custom RAG Pipeline**
+
+```typescript
+import { Pinecone } from '@pinecone-database/pinecone';
+import { RecursiveChunker } from '@chonkiejs/core';
+import OpenAI from 'openai';
+
+export class CustomRAGPipeline {
+  private pinecone;
+  private index;
+  private openai;
+  private chunker;
+
+  constructor() {
+    this.pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
+    this.index = this.pinecone.index('coask-knowledge');
+    this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+
+  async initialize() {
+    this.chunker = await RecursiveChunker.create({
+      chunkSize: 1000,
+      chunkOverlap: 200,
+    });
+  }
+
+  // Ingest document into knowledge base
+  async ingestDocument(filePath: string, metadata: any = {}) {
+    // 1. Extract text using Mistral OCR
+    const text = await extractTextFromDocument(filePath);
+
+    // 2. Chunk text using ChonkieJS
+    const chunks = await this.chunker.chunk(text);
+
+    // 3. Generate embeddings and upsert to Pinecone
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const embedding = await this.generateEmbedding(chunk.text);
+
+      await this.index.upsert([{
+        id: `${metadata.docId || 'doc'}_chunk_${i}`,
+        values: embedding,
+        metadata: {
+          text: chunk.text,
+          tokenCount: chunk.tokenCount,
+          chunkIndex: i,
+          totalChunks: chunks.length,
+          source: filePath,
+          ...metadata,
+          timestamp: new Date().toISOString(),
+        },
+      }]);
+    }
+
+    return { chunksCreated: chunks.length };
+  }
+
+  // Query knowledge base with hybrid search
+  async query(question: string, topK: number = 5): Promise<string> {
+    // 1. Generate query embedding
+    const queryEmbedding = await this.generateEmbedding(question);
+
+    // 2. Hybrid search (vector + keyword)
+    const results = await this.index.query({
+      vector: queryEmbedding,
+      topK,
+      includeMetadata: true,
+      // Pinecone hybrid search combines vector similarity with BM25 keyword matching
+    });
+
+    // 3. Format context for LLM
+    const context = results.matches
+      .map((match, i) => {
+        return `[Document ${i + 1}] (Relevance: ${(match.score * 100).toFixed(1)}%)\n${match.metadata?.text}`;
+      })
+      .join('\n\n---\n\n');
+
+    return context;
+  }
+
+  // Query with metadata filtering
+  async queryWithFilter(question: string, filter: any, topK: number = 5): Promise<string> {
+    const queryEmbedding = await this.generateEmbedding(question);
+
+    const results = await this.index.query({
+      vector: queryEmbedding,
+      topK,
+      filter, // e.g., { category: { $eq: 'email_templates' } }
+      includeMetadata: true,
+    });
+
+    const context = results.matches
+      .map((match, i) => `[${i + 1}] ${match.metadata?.text}`)
+      .join('\n\n');
+
+    return context;
+  }
+
+  private async generateEmbedding(text: string): Promise<number[]> {
+    const response = await this.openai.embeddings.create({
+      model: 'text-embedding-ada-002',
+      input: text,
+    });
+
+    return response.data[0].embedding;
+  }
+}
+```
+
+**Usage Example**:
+```typescript
+// Initialize pipeline
+const rag = new CustomRAGPipeline();
+await rag.initialize();
+
+// Ingest document
+await rag.ingestDocument('./docs/product_guide.pdf', {
+  docId: 'product_guide',
+  category: 'documentation',
+  version: '2.0',
+});
+
+// Query knowledge base
+const context = await rag.query('What are our pricing tiers?');
+
+// Use context in LLM prompt
+const answer = await callLLM(`
+  Context: ${context}
+
+  Question: What are our pricing tiers?
+
+  Answer based on the context above:
+`);
+```
+
+**Optimization Options**:
+
+**1. Hybrid Search Tuning**
+```typescript
+await index.query({
+  vector: queryEmbedding,
+  topK: 5,
+  alpha: 0.7, // 70% vector, 30% keyword (if supported by Pinecone)
+});
+```
+
+**2. Reranking** (optional for better accuracy)
+```typescript
+// Get top 20 results, rerank to top 5
+import { CohereClient } from 'cohere-ai';
+
+const cohere = new CohereClient({ token: process.env.COHERE_API_KEY });
+const reranked = await cohere.rerank({
+  query: question,
+  documents: results.map(r => r.metadata.text),
+  topN: 5,
+});
+```
+
+**3. Caching** (Redis for frequent queries)
+```typescript
+async query(question: string, topK: number = 5): Promise<string> {
+  // Check cache first
+  const cacheKey = `query:${question}`;
+  const cached = await redis.get(cacheKey);
+  if (cached) return cached;
+
+  // Query and cache result
+  const context = await this.performQuery(question, topK);
+  await redis.setex(cacheKey, 3600, context); // Cache for 1 hour
+
+  return context;
+}
+```
+
+**Cost Analysis**:
+- **Mistral OCR**: Check Mistral pricing (document-based)
+- **OpenAI Embeddings**: $0.0001 / 1K tokens (~$0.10 per 1M tokens)
+- **Pinecone**: $70/month for 10M vectors (same as before)
+- **Total Added Cost**: Minimal (~$5-10/month for embeddings at scale)
+
+**When LlamaIndex Would Be Better**:
+- Experimenting with many different retrieval strategies
+- Need quick prototyping with multiple data sources
+- Want pre-built loaders for various file formats
+
+**For Coask**: Custom pipeline is superior because:
+- ✅ Focused use case (company docs, email templates)
+- ✅ Need full control over chunking and retrieval
+- ✅ Want to optimize for specific query patterns
+- ✅ Prefer direct API integration (less black box)
+- ✅ Easier debugging and monitoring
 
 ---
 
@@ -760,7 +1039,7 @@ Backend:       Express
 AI Framework:  LangGraph + LangChain
 LLM:           OpenAI GPT-4 Turbo (primary), Claude 3.5 (fallback)
 Memory:        Mem0 + Pinecone
-RAG:           LlamaIndex
+RAG:           Custom Pipeline (Mistral OCR + ChonkieJS + OpenAI Embeddings + Pinecone)
 Queue:         BullMQ + Redis
 Database:      PostgreSQL (Prisma ORM)
 Cache:         Redis (Upstash)
@@ -788,7 +1067,10 @@ npx tsc --init
 ```bash
 # AI & Agents
 pnpm add @langchain/langgraph @langchain/core langchain
-pnpm add openai @anthropic-ai/sdk llamaindex
+pnpm add openai @anthropic-ai/sdk
+
+# RAG Pipeline Components
+pnpm add @chonkiejs/core axios form-data
 
 # Memory & Vector DB
 pnpm add mem0ai @pinecone-database/pinecone
@@ -815,14 +1097,22 @@ pnpm add dotenv zod winston
 ### 3. Environment Variables
 ```bash
 # .env
+# LLM Providers
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
+
+# RAG Pipeline
+MISTRAL_API_KEY=...
 PINECONE_API_KEY=...
+
+# Email & Integrations
 RESEND_API_KEY=re_...
-REDIS_URL=redis://...
-DATABASE_URL=postgresql://...
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
+
+# Infrastructure
+REDIS_URL=redis://...
+DATABASE_URL=postgresql://...
 ```
 
 ### 4. Project Structure
