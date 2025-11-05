@@ -1,0 +1,41 @@
+{
+  "name": "coask",
+  "version": "0.1.0",
+  "description": "Personal AI Automation Platform - Your intelligent team of AI agents",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "lint": "echo \"Linting not configured yet\"",
+    "test": "echo \"Tests not configured yet\""
+  },
+  "keywords": [
+    "ai",
+    "automation",
+    "agents",
+    "rag",
+    "email",
+    "scheduling"
+  ],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.19.0",
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.0",
+    "nodemon": "^3.1.10",
+    "prisma": "^6.19.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0"
+  }
+}
