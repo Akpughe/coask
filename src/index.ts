@@ -2,6 +2,7 @@ import express, { Express, Request, Response, NextFunction } from 'express';
 import { config } from './core/config';
 import { logger } from './utils/logger';
 import healthRouter from './routes/health';
+import agentsRouter from './routes/agents';
 
 // Create Express app
 const app: Express = express();
@@ -24,6 +25,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // Routes
 app.use('/', healthRouter);
+app.use('/agents', agentsRouter);
 
 // 404 handler
 app.use((req: Request, res: Response) => {
