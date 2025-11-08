@@ -19,6 +19,7 @@ interface Config {
   // RAG Pipeline
   mistralApiKey: string;
   pineconeApiKey: string;
+  pineconeIndexName: string;
 
   // Email & Integrations
   resendApiKey: string;
@@ -55,6 +56,7 @@ export const config: Config = {
   // RAG Pipeline
   mistralApiKey: getEnvVar('MISTRAL_API_KEY'),
   pineconeApiKey: getEnvVar('PINECONE_API_KEY'),
+  pineconeIndexName: getEnvVar('PINECONE_INDEX_NAME', 'coask-knowledge'),
 
   // Email & Integrations
   resendApiKey: getEnvVar('RESEND_API_KEY'),

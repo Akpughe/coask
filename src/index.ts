@@ -3,6 +3,7 @@ import { config } from './core/config';
 import { logger } from './utils/logger';
 import healthRouter from './routes/health';
 import agentsRouter from './routes/agents';
+import knowledgeRouter from './routes/knowledge';
 
 // Create Express app
 const app: Express = express();
@@ -26,6 +27,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // Routes
 app.use('/', healthRouter);
 app.use('/agents', agentsRouter);
+app.use('/knowledge', knowledgeRouter);
 
 // 404 handler
 app.use((req: Request, res: Response) => {

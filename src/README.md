@@ -19,9 +19,9 @@ src/
 └── index.ts         # Main application entry point
 ```
 
-## Current Phase: Phase 1 ✅
+## Current Phase: Phase 2 ✅
 
-**Status**: Single Agent + Basic Memory Complete
+**Status**: Knowledge Base + Custom RAG Pipeline Complete
 
 ### What's Implemented:
 - ✅ TypeScript configuration
@@ -32,8 +32,12 @@ src/
 - ✅ LLM client wrapper (OpenAI & Anthropic)
 - ✅ In-memory conversation store
 - ✅ Email Agent with drafting and reply capabilities
-- ✅ Agent API endpoints
-- ✅ Project structure
+- ✅ Custom RAG Pipeline (Mistral OCR + ChonkieJS + OpenAI Embeddings + Pinecone)
+- ✅ Document extractor (PDF, images, text)
+- ✅ Text chunker with multiple strategies
+- ✅ Embedding generator (OpenAI ada-002)
+- ✅ Vector store (Pinecone with hybrid search)
+- ✅ Knowledge base API endpoints
 
 ### Available Endpoints:
 
@@ -48,6 +52,15 @@ src/
 - `GET /agents/email/conversations/:userId` - Get user conversations
 - `DELETE /agents/email/history/:userId` - Clear conversation history
 
+**Knowledge Base:**
+- `POST /knowledge/ingest/file` - Ingest document from file upload
+- `POST /knowledge/ingest/url` - Ingest document from URL
+- `POST /knowledge/ingest/text` - Ingest plain text
+- `POST /knowledge/query` - Query the knowledge base
+- `DELETE /knowledge/document/:docId` - Delete a document
+- `GET /knowledge/stats` - Get knowledge base statistics
+- `GET /knowledge/health` - Check knowledge base health
+
 ### Development Commands:
 ```bash
 # Start development server
@@ -60,13 +73,21 @@ pnpm build
 pnpm start
 ```
 
-### Testing the Email Agent:
+### Required API Keys:
 
-**Note:** You need to add your OpenAI or Anthropic API key to `.env` to use the Email Agent:
+**For Email Agent:**
 ```bash
 OPENAI_API_KEY=sk-...
 # OR
 ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**For Knowledge Base (RAG Pipeline):**
+```bash
+OPENAI_API_KEY=sk-...           # For embeddings
+PINECONE_API_KEY=...            # For vector storage
+MISTRAL_API_KEY=...             # For OCR (optional, for PDF/image extraction)
+PINECONE_INDEX_NAME=coask-knowledge  # Pinecone index name (optional, defaults to this)
 ```
 
 **Example requests:**
@@ -101,6 +122,47 @@ curl http://localhost:3000/agents/email/stats
 curl http://localhost:3000/agents/email/conversations/user123
 ```
 
-## Next Phase: Phase 2 - Knowledge Base + Custom RAG Pipeline
+### Testing the Knowledge Base:
+
+```bash
+# Ingest plain text
+curl -X POST http://localhost:3000/knowledge/ingest/text \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Coask is a personal AI automation platform...",
+    "fileName": "about-coask.txt",
+    "category": "documentation"
+  }'
+
+# Ingest from URL
+curl -X POST http://localhost:3000/knowledge/ingest/url \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/document.pdf",
+    "category": "reference"
+  }'
+
+# Upload a file
+curl -X POST http://localhost:3000/knowledge/ingest/file \
+  -F "file=@/path/to/document.pdf" \
+  -F "category=documentation"
+
+# Query the knowledge base
+curl -X POST http://localhost:3000/knowledge/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "What is Coask?",
+    "topK": 3,
+    "minScore": 0.7
+  }'
+
+# Get knowledge base statistics
+curl http://localhost:3000/knowledge/stats
+
+# Check knowledge base health
+curl http://localhost:3000/knowledge/health
+```
+
+## Next Phase: Phase 3 - Multi-Agent System
 
 Coming soon...
