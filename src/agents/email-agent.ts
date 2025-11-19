@@ -1,5 +1,6 @@
 import { llmClient, LLMProvider, ChatMessage } from '../core/llm-client';
 import { conversationStore } from '../memory/conversation-store';
+import { ragPipeline } from '../rag/custom-rag-pipeline';
 import { logger } from '../utils/logger';
 
 export interface EmailDraftRequest {
@@ -9,6 +10,8 @@ export interface EmailDraftRequest {
   context: string;
   tone?: 'professional' | 'casual' | 'friendly' | 'formal';
   length?: 'short' | 'medium' | 'long';
+  useRAG?: boolean;
+  ragCategory?: string;
 }
 
 export interface EmailDraftResponse {
@@ -19,6 +22,8 @@ export interface EmailDraftResponse {
     provider: string;
     model: string;
     tokensUsed: number;
+    usedRAG?: boolean;
+    ragSources?: number;
   };
 }
 
@@ -27,6 +32,8 @@ export interface EmailReplyRequest {
   originalEmail: string;
   replyContext: string;
   tone?: 'professional' | 'casual' | 'friendly' | 'formal';
+  useRAG?: boolean;
+  ragCategory?: string;
 }
 
 export interface EmailReplyResponse {
@@ -36,12 +43,15 @@ export interface EmailReplyResponse {
     provider: string;
     model: string;
     tokensUsed: number;
+    usedRAG?: boolean;
+    ragSources?: number;
   };
 }
 
 /**
  * Email Agent - Specialized AI agent for email composition and management
  * Phase 1: Basic email drafting and reply functionality
+ * Phase 3: RAG integration for knowledge-enhanced emails
  * Future phases: Email classification, scheduling, follow-ups
  */
 class EmailAgent {
@@ -83,7 +93,7 @@ SUBJECT: [Email subject line]
       length = 'medium',
     } = request;
 
-    logger.info('Email Agent: Drafting email', { userId, tone, length });
+    logger.info('Email Agent: Drafting email', { userId, tone, length, useRAG: request.useRAG });
 
     // Get or create conversation for this user
     const conversation = conversationStore.getOrCreateConversation(userId, this.agentType);
@@ -93,6 +103,28 @@ SUBJECT: [Email subject line]
       conversationStore.addMessage(conversation.id, 'system', this.systemPrompt);
     }
 
+    // Optionally retrieve relevant context from RAG
+    let ragContext = '';
+    let ragSources = 0;
+    if (request.useRAG && ragPipeline.isReady()) {
+      try {
+        logger.debug('Querying knowledge base for email context', { context });
+        const ragResult = await ragPipeline.query(context, {
+          topK: 3,
+          filter: request.ragCategory ? { category: request.ragCategory } : undefined,
+          minScore: 0.7,
+        });
+
+        if (ragResult.sources.length > 0) {
+          ragContext = `\n\nRELEVANT INFORMATION FROM KNOWLEDGE BASE:\n${ragResult.context}\n`;
+          ragSources = ragResult.sources.length;
+          logger.info('RAG context retrieved', { sources: ragSources });
+        }
+      } catch (error) {
+        logger.warn('Failed to retrieve RAG context', error);
+      }
+    }
+
     // Build user prompt
     let userPrompt = `Draft an email with the following details:\n\n`;
     if (to) userPrompt += `To: ${to}\n`;
@@ -100,6 +132,7 @@ SUBJECT: [Email subject line]
     userPrompt += `Tone: ${tone}\n`;
     userPrompt += `Length: ${length}\n`;
     userPrompt += `\nContext:\n${context}\n`;
+    if (ragContext) userPrompt += ragContext;
     userPrompt += `\nPlease draft the email following the format specified.`;
 
     // Add user message to conversation
@@ -140,6 +173,8 @@ SUBJECT: [Email subject line]
         provider: response.provider,
         model: response.model,
         tokensUsed: response.usage?.totalTokens || 0,
+        usedRAG: request.useRAG && ragSources > 0,
+        ragSources: ragSources > 0 ? ragSources : undefined,
       },
     };
   }
@@ -150,7 +185,7 @@ SUBJECT: [Email subject line]
   async replyToEmail(request: EmailReplyRequest): Promise<EmailReplyResponse> {
     const { userId, originalEmail, replyContext, tone = 'professional' } = request;
 
-    logger.info('Email Agent: Generating reply', { userId, tone });
+    logger.info('Email Agent: Generating reply', { userId, tone, useRAG: request.useRAG });
 
     // Get or create conversation for this user
     const conversation = conversationStore.getOrCreateConversation(userId, this.agentType);
@@ -160,8 +195,30 @@ SUBJECT: [Email subject line]
       conversationStore.addMessage(conversation.id, 'system', this.systemPrompt);
     }
 
+    // Optionally retrieve relevant context from RAG
+    let ragContext = '';
+    let ragSources = 0;
+    if (request.useRAG && ragPipeline.isReady()) {
+      try {
+        logger.debug('Querying knowledge base for reply context', { replyContext });
+        const ragResult = await ragPipeline.query(replyContext, {
+          topK: 3,
+          filter: request.ragCategory ? { category: request.ragCategory } : undefined,
+          minScore: 0.7,
+        });
+
+        if (ragResult.sources.length > 0) {
+          ragContext = `\n\nRELEVANT INFORMATION FROM KNOWLEDGE BASE:\n${ragResult.context}\n`;
+          ragSources = ragResult.sources.length;
+          logger.info('RAG context retrieved for reply', { sources: ragSources });
+        }
+      } catch (error) {
+        logger.warn('Failed to retrieve RAG context for reply', error);
+      }
+    }
+
     // Build user prompt
-    const userPrompt = `Generate a reply to the following email:\n\n---
+    let userPrompt = `Generate a reply to the following email:\n\n---
 ORIGINAL EMAIL:
 ${originalEmail}
 ---
@@ -169,9 +226,9 @@ ${originalEmail}
 REPLY CONTEXT:
 ${replyContext}
 
-TONE: ${tone}
-
-Please generate an appropriate reply following email best practices.`;
+TONE: ${tone}`;
+    if (ragContext) userPrompt += `\n${ragContext}`;
+    userPrompt += `\n\nPlease generate an appropriate reply following email best practices.`;
 
     // Add user message to conversation
     conversationStore.addMessage(conversation.id, 'user', userPrompt);
@@ -210,6 +267,8 @@ Please generate an appropriate reply following email best practices.`;
         provider: response.provider,
         model: response.model,
         tokensUsed: response.usage?.totalTokens || 0,
+        usedRAG: request.useRAG && ragSources > 0,
+        ragSources: ragSources > 0 ? ragSources : undefined,
       },
     };
   }
