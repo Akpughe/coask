@@ -6,6 +6,8 @@ import healthRouter from './routes/health';
 import agentsRouter from './routes/agents';
 import knowledgeRouter from './routes/knowledge';
 import orchestrationRouter from './routes/orchestration';
+import scheduleRouter from './routes/schedule';
+import calendarRouter from './routes/calendar';
 
 // Create Express app
 const app: Express = express();
@@ -31,6 +33,8 @@ app.use('/', healthRouter);
 app.use('/agents', agentsRouter);
 app.use('/knowledge', knowledgeRouter);
 app.use('/orchestration', orchestrationRouter);
+app.use('/schedule', scheduleRouter);
+app.use('/calendar', calendarRouter);
 
 // 404 handler
 app.use((req: Request, res: Response) => {
