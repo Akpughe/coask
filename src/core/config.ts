@@ -21,8 +21,15 @@ interface Config {
   pineconeApiKey: string;
   pineconeIndexName: string;
 
-  // Email & Integrations
+  // Email Providers
   resendApiKey: string;
+  sendgridApiKey: string;
+  awsSesAccessKey: string;
+  awsSesSecretKey: string;
+  awsSesRegion: string;
+
+  // Integrations
+  exaApiKey: string;
   googleClientId: string;
   googleClientSecret: string;
   googleRedirectUri: string;
@@ -58,8 +65,15 @@ export const config: Config = {
   pineconeApiKey: getEnvVar('PINECONE_API_KEY'),
   pineconeIndexName: getEnvVar('PINECONE_INDEX_NAME', 'coask-knowledge'),
 
-  // Email & Integrations
+  // Email Providers
   resendApiKey: getEnvVar('RESEND_API_KEY'),
+  sendgridApiKey: getEnvVar('SENDGRID_API_KEY'),
+  awsSesAccessKey: getEnvVar('AWS_SES_ACCESS_KEY'),
+  awsSesSecretKey: getEnvVar('AWS_SES_SECRET_KEY'),
+  awsSesRegion: getEnvVar('AWS_SES_REGION', 'us-east-1'),
+
+  // Integrations
+  exaApiKey: getEnvVar('EXA_API_KEY'),
   googleClientId: getEnvVar('GOOGLE_CLIENT_ID'),
   googleClientSecret: getEnvVar('GOOGLE_CLIENT_SECRET'),
   googleRedirectUri: getEnvVar('GOOGLE_REDIRECT_URI', 'http://localhost:3000/auth/google/callback'),

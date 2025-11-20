@@ -2,7 +2,8 @@ import { BaseAgent, AgentCapability, AgentTask, AgentContext } from './base-agen
 import { llmClient, LLMProvider } from '../core/llm-client';
 import { ragPipeline } from '../rag/custom-rag-pipeline';
 import { logger } from '../utils/logger';
-import axios from 'axios';
+import { config } from '../core/config';
+import Exa from 'exa-js';
 
 /**
  * Research task types
@@ -67,9 +68,19 @@ export class ResearchAgent extends BaseAgent {
 
 Always cite sources when researching and be objective in your analysis.`;
 
+  private exaClient: Exa | null = null;
+
   constructor() {
     super('Research Agent', 'research', 'AI agent for research, summarization, and analysis');
     this.agentVersion = '1.0.0';
+
+    // Initialize Exa client if API key is available
+    if (config.exaApiKey) {
+      this.exaClient = new Exa(config.exaApiKey);
+      logger.info('✅ Exa client initialized for Research Agent');
+    } else {
+      logger.warn('⚠️  Exa API key not found - web search will use fallback mode');
+    }
   }
 
   protected getCapabilities(): AgentCapability[] {
@@ -135,40 +146,61 @@ Always cite sources when researching and be objective in your analysis.`;
   }
 
   /**
-   * Perform web search (using mock data for now - can integrate real search API)
+   * Perform web search using Exa API
    */
   private async webSearch(
     request: WebSearchRequest,
     context: AgentContext
   ): Promise<{
     query: string;
-    results: Array<{ title: string; snippet: string; source: string }>;
+    results: Array<{ title: string; snippet: string; source: string; publishedDate?: string }>;
     synthesis: string;
     savedToKnowledgeBase?: boolean;
+    searchProvider: 'exa' | 'fallback';
   }> {
     logger.info('Research Agent: Web search', { query: request.query });
 
-    // For now, use a mock search result
-    // In production, integrate with Google Search API, Bing API, or SerpAPI
-    const mockResults = [
-      {
-        title: `Understanding ${request.query}`,
-        snippet: `${request.query} is an important topic in modern technology...`,
-        source: 'https://example.com/article1',
-      },
-      {
-        title: `The Complete Guide to ${request.query}`,
-        snippet: `Learn everything about ${request.query} including best practices...`,
-        source: 'https://example.com/article2',
-      },
-    ];
+    const numResults = request.numResults || 5;
+    let results: Array<{ title: string; snippet: string; source: string; publishedDate?: string }> = [];
+    let searchProvider: 'exa' | 'fallback' = 'fallback';
+
+    // Try Exa search if client is available
+    if (this.exaClient) {
+      try {
+        logger.info('Using Exa for web search', { query: request.query, numResults });
+
+        const searchResponse = await this.exaClient.searchAndContents(request.query, {
+          numResults,
+          text: { maxCharacters: 1000 }, // Get text snippets
+          highlights: true,
+        });
+
+        results = searchResponse.results.map((result: any) => ({
+          title: result.title || 'Untitled',
+          snippet: result.text || result.highlights?.[0] || 'No snippet available',
+          source: result.url,
+          publishedDate: result.publishedDate,
+        }));
+
+        searchProvider = 'exa';
+        logger.info('Exa search completed', { resultsCount: results.length });
+      } catch (error: any) {
+        logger.error('Exa search failed, falling back to mock data', error);
+        searchProvider = 'fallback';
+        results = this.getMockResults(request.query);
+      }
+    } else {
+      // Fallback to mock results if Exa is not available
+      logger.info('Exa not available, using fallback search');
+      results = this.getMockResults(request.query);
+    }
 
     // Synthesize results using LLM
     const synthesisPrompt = `Based on the following search results for "${request.query}", provide a comprehensive summary:
 
-${mockResults.map((r, i) => `${i + 1}. ${r.title}\n${r.snippet}\nSource: ${r.source}`).join('\n\n')}
+${results.map((r, i) => `${i + 1}. ${r.title}\n${r.snippet}\nSource: ${r.source}${r.publishedDate ? `\nPublished: ${r.publishedDate}` : ''}`).join('\n\n')}
 
-Provide a well-structured summary with key points and insights.`;
+Provide a well-structured summary with key points and insights. Include the most important facts and cite sources.`;
 
     const synthesis = await llmClient.chat(
       [
@@ -193,6 +225,8 @@ Provide a well-structured summary with key points and insights.`;
             query: request.query,
             searchDate: new Date().toISOString(),
             userId: request.userId,
+            searchProvider,
+            numResults: results.length,
           },
         });
         savedToKnowledgeBase = true;
@@ -204,10 +238,34 @@ Provide a well-structured summary with key points and insights.`;
 
     return {
       query: request.query,
-      results: mockResults,
+      results,
       synthesis: synthesis.content,
       savedToKnowledgeBase,
+      searchProvider,
     };
+  }
+
+  /**
+   * Get mock search results (fallback when Exa is not available)
+   */
+  private getMockResults(query: string): Array<{ title: string; snippet: string; source: string }> {
+    return [
+      {
+        title: `Understanding ${query}`,
+        snippet: `${query} is an important topic with significant implications. Current research suggests various approaches and methodologies for understanding this subject in depth.`,
+        source: 'https://example.com/article1',
+      },
+      {
+        title: `The Complete Guide to ${query}`,
+        snippet: `Learn everything about ${query} including best practices, common pitfalls, and expert recommendations for implementation and analysis.`,
+        source: 'https://example.com/article2',
+      },
+      {
+        title: `${query}: Latest Trends and Insights`,
+        snippet: `Recent developments in ${query} show promising results. Industry experts highlight key factors and emerging patterns worth noting.`,
+        source: 'https://example.com/article3',
+      },
+    ];
   }
 
   /**
