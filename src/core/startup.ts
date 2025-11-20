@@ -2,6 +2,7 @@ import { agentRegistry } from '../agents/base-agent';
 import { researchAgent } from '../agents/research-agent';
 import { calendarAgent } from '../agents/calendar-agent';
 import { jobProcessor } from '../queue/job-processor';
+import { emailProviderManager } from '../email/email-provider-manager';
 import { logger } from '../utils/logger';
 
 /**
@@ -36,6 +37,44 @@ export function initializeJobProcessor(): void {
 }
 
 /**
+ * Initialize email providers
+ */
+export function initializeEmailProviders(): void {
+  logger.info('Initializing email providers...');
+
+  // Email provider manager is initialized on import
+  // Get configured providers and domain routing
+  const configuredProviders = emailProviderManager.getConfiguredProviders();
+  const domainRoutings = emailProviderManager.getDomainRoutings();
+
+  if (configuredProviders.length === 0) {
+    logger.warn('⚠️  No email providers configured - email sending will be unavailable');
+    return;
+  }
+
+  logger.info('✅ Email providers ready', {
+    providers: configuredProviders.map((p) => ({
+      name: p.name,
+      priority: p.config.priority,
+    })),
+    domainRoutings: domainRoutings.length,
+  });
+
+  // Log domain routing configuration
+  if (domainRoutings.length > 0) {
+    domainRoutings.forEach((routing) => {
+      logger.info('Email domain routing configured', {
+        domain: routing.domain,
+        provider: routing.provider,
+        fromAddress: routing.fromAddress,
+      });
+    });
+  } else {
+    logger.info('No domain routing configured - using default provider for all emails');
+  }
+}
+
+/**
  * Perform all startup tasks
  */
 export async function startup(): Promise<void> {
@@ -46,6 +85,9 @@ export async function startup(): Promise<void> {
 
   // Initialize job processor
   initializeJobProcessor();
+
+  // Initialize email providers
+  initializeEmailProviders();
 
   logger.info('✅ Coask initialization complete');
 }

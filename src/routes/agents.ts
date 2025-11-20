@@ -64,6 +64,65 @@ router.post('/email/draft', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /agents/email/send
+ * Send an email using the multi-provider system
+ */
+router.post('/email/send', async (req: Request, res: Response) => {
+  try {
+    const { userId, from, to, subject, html, text, cc, bcc, replyTo, attachments } = req.body;
+
+    // Validation
+    if (!userId || !from || !to || !subject) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'userId, from, to, and subject are required',
+      });
+    }
+
+    if (!html && !text) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Either html or text content is required',
+      });
+    }
+
+    logger.info('POST /agents/email/send', { userId, from, to, subject });
+
+    const result = await emailAgent.sendEmail({
+      userId,
+      from,
+      to,
+      subject,
+      html,
+      text,
+      cc,
+      bcc,
+      replyTo,
+      attachments,
+    });
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: 'Email Send Failed',
+        message: result.error || 'Failed to send email',
+        provider: result.provider,
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    logger.error('Error sending email', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: error.message || 'Failed to send email',
+    });
+  }
+});
+
+/**
  * POST /agents/email/reply
  * Generate a reply to an email
  */

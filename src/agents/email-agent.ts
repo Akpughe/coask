@@ -2,6 +2,8 @@ import { llmClient, LLMProvider, ChatMessage } from '../core/llm-client';
 import { conversationStore } from '../memory/conversation-store';
 import { ragPipeline } from '../rag/custom-rag-pipeline';
 import { logger } from '../utils/logger';
+import { emailProviderManager } from '../email/email-provider-manager';
+import { EmailParams, EmailResult, EmailAttachment } from '../email/email-provider';
 
 export interface EmailDraftRequest {
   userId: string;
@@ -48,10 +50,32 @@ export interface EmailReplyResponse {
   };
 }
 
+export interface EmailSendRequest {
+  userId: string;
+  from: string;
+  to: string | string[];
+  subject: string;
+  html?: string;
+  text?: string;
+  cc?: string | string[];
+  bcc?: string | string[];
+  replyTo?: string;
+  attachments?: EmailAttachment[];
+}
+
+export interface EmailSendResponse {
+  success: boolean;
+  messageId?: string;
+  provider: string;
+  error?: string;
+  metadata?: Record<string, any>;
+}
+
 /**
  * Email Agent - Specialized AI agent for email composition and management
  * Phase 1: Basic email drafting and reply functionality
  * Phase 3: RAG integration for knowledge-enhanced emails
+ * Phase 5: Multi-provider email sending
  * Future phases: Email classification, scheduling, follow-ups
  */
 class EmailAgent {
@@ -271,6 +295,96 @@ TONE: ${tone}`;
         ragSources: ragSources > 0 ? ragSources : undefined,
       },
     };
+  }
+
+  /**
+   * Send an email using the multi-provider email system
+   */
+  async sendEmail(request: EmailSendRequest): Promise<EmailSendResponse> {
+    const { userId, from, to, subject, html, text, cc, bcc, replyTo, attachments } = request;
+
+    logger.info('Email Agent: Sending email', {
+      userId,
+      from,
+      to: Array.isArray(to) ? to.join(', ') : to,
+      subject,
+    });
+
+    // Validate required fields
+    if (!from || !to || !subject) {
+      const error = 'Missing required fields: from, to, and subject are required';
+      logger.error('Email send validation failed', { error });
+      return {
+        success: false,
+        provider: 'none',
+        error,
+      };
+    }
+
+    if (!html && !text) {
+      const error = 'Either html or text content is required';
+      logger.error('Email send validation failed', { error });
+      return {
+        success: false,
+        provider: 'none',
+        error,
+      };
+    }
+
+    // Check if any email provider is configured
+    if (!emailProviderManager.hasConfiguredProvider()) {
+      const error = 'No email provider configured';
+      logger.error('Email send failed', { error });
+      return {
+        success: false,
+        provider: 'none',
+        error,
+      };
+    }
+
+    try {
+      // Send via email provider manager (handles routing and provider selection)
+      const result = await emailProviderManager.send({
+        from,
+        to,
+        subject,
+        html,
+        text,
+        cc,
+        bcc,
+        replyTo,
+        attachments,
+      });
+
+      if (result.success) {
+        logger.info('Email sent successfully', {
+          userId,
+          provider: result.provider,
+          messageId: result.messageId,
+        });
+      } else {
+        logger.error('Email send failed', {
+          userId,
+          provider: result.provider,
+          error: result.error,
+        });
+      }
+
+      return {
+        success: result.success,
+        messageId: result.messageId,
+        provider: result.provider,
+        error: result.error,
+        metadata: result.metadata,
+      };
+    } catch (error: any) {
+      logger.error('Email send exception', error);
+      return {
+        success: false,
+        provider: 'unknown',
+        error: error.message || 'Failed to send email',
+      };
+    }
   }
 
   /**
