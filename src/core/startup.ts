@@ -3,6 +3,14 @@ import { researchAgent } from '../agents/research-agent';
 import { calendarAgent } from '../agents/calendar-agent';
 import { jobProcessor } from '../queue/job-processor';
 import { emailProviderManager } from '../email/email-provider-manager';
+import { webhookManager } from '../webhooks/webhook-manager';
+import {
+  handleGitHubWebhook,
+  handleSlackWebhook,
+  handleCustomWebhook,
+} from '../webhooks';
+import { traceManager } from '../tracing/trace-manager';
+import { costTracker } from '../cost-tracking/cost-tracker';
 import { logger } from '../utils/logger';
 
 /**
@@ -75,6 +83,50 @@ export function initializeEmailProviders(): void {
 }
 
 /**
+ * Initialize webhooks
+ */
+export function initializeWebhooks(): void {
+  logger.info('Initializing webhooks...');
+
+  // Register webhook handlers
+  webhookManager.registerHandler('github', handleGitHubWebhook);
+  webhookManager.registerHandler('slack', handleSlackWebhook);
+  webhookManager.registerHandler('custom', handleCustomWebhook);
+
+  const stats = webhookManager.getStats();
+
+  logger.info('✅ Webhooks initialized', {
+    handlers: stats.registeredHandlers,
+    totalWebhooks: stats.totalWebhooks,
+    enabled: stats.enabledWebhooks,
+  });
+}
+
+/**
+ * Initialize observability systems (tracing and cost tracking)
+ */
+export function initializeObservability(): void {
+  logger.info('Initializing observability systems...');
+
+  // Trace manager is initialized on import
+  const traceStats = traceManager.getStats();
+
+  logger.info('✅ Trace Manager ready', {
+    totalTraces: traceStats.totalTraces,
+    activeTraces: traceStats.runningTraces,
+  });
+
+  // Cost tracker is initialized on import
+  const budgets = costTracker.getBudgets();
+  const alerts = costTracker.getAlerts(5);
+
+  logger.info('✅ Cost Tracker ready', {
+    budgets: budgets.length,
+    recentAlerts: alerts.length,
+  });
+}
+
+/**
  * Perform all startup tasks
  */
 export async function startup(): Promise<void> {
@@ -88,6 +140,12 @@ export async function startup(): Promise<void> {
 
   // Initialize email providers
   initializeEmailProviders();
+
+  // Initialize webhooks
+  initializeWebhooks();
+
+  // Initialize observability
+  initializeObservability();
 
   logger.info('✅ Coask initialization complete');
 }

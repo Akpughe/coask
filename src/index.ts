@@ -8,6 +8,9 @@ import knowledgeRouter from './routes/knowledge';
 import orchestrationRouter from './routes/orchestration';
 import scheduleRouter from './routes/schedule';
 import calendarRouter from './routes/calendar';
+import webhooksRouter from './routes/webhooks';
+import tracingRouter from './routes/tracing';
+import costsRouter from './routes/costs';
 
 // Create Express app
 const app: Express = express();
@@ -35,6 +38,9 @@ app.use('/knowledge', knowledgeRouter);
 app.use('/orchestration', orchestrationRouter);
 app.use('/schedule', scheduleRouter);
 app.use('/calendar', calendarRouter);
+app.use('/webhooks', webhooksRouter);
+app.use('/tracing', tracingRouter);
+app.use('/costs', costsRouter);
 
 // 404 handler
 app.use((req: Request, res: Response) => {
